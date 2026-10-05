@@ -1,0 +1,12 @@
+# Workspace contents are never tracked; only the placeholders are.
+workspaces/*/*
+!workspaces/*/.gitkeep
+
+# Local configuration and private denylist
+.env
+.leak-denylist
+
+# OS junk
+.DS_Store
+._*
+Thumbs.db
