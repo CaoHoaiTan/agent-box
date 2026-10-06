@@ -1,0 +1,19 @@
+# Claude Code
+api.anthropic.com
+claude.ai
+console.anthropic.com
+statsig.anthropic.com
+
+# OpenAI Codex
+api.openai.com
+auth.openai.com
+chatgpt.com
+
+# Package registries
+registry.npmjs.org
+
+# GitHub (read-only: the box has no credentials)
+github.com
+api.github.com
+codeload.github.com
+objects.githubusercontent.com
