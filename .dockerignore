@@ -1,8 +1,8 @@
+# The build only needs scripts/ and config/. Never send workspaces (user code),
+# secrets or git history to the Docker daemon as build context.
 .git
 .env
-.env.*
-!.env.example
 .leak-denylist
 workspaces
-.DS_Store
-._*
+docs
+PLAN.md

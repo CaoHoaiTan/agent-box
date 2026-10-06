@@ -31,7 +31,12 @@ COPY --chown=root:root --chmod=644 config/codex-config.toml config/claude-settin
 RUN mkdir -p /workspace /home/node/.claude /home/node/.codex \
     && chown node:node /workspace /home/node/.claude /home/node/.codex
 
+# hadolint ignore=DL3066
+# Named users are clearer than uid 1000/0; the image defines both.
 USER node
+# Keep Claude Code's state (incl. the login in .claude.json) inside the
+# volume-mounted ~/.claude, otherwise logins vanish when a box is recreated.
+ENV CLAUDE_CONFIG_DIR=/home/node/.claude
 ENV PATH="/home/node/.local/bin:${PATH}"
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_CODE_VERSION}"
 
