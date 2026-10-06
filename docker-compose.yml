@@ -1,0 +1,43 @@
+# SECURITY: never mount the Docker socket, ~/.ssh, ~/.gnupg, ~/.gitconfig,
+# ~/.aws, ~/.config, the user's home directory, or any host path outside the
+# configured workspace folders. Agent logins belong in the named volumes below.
+x-box: &box
+  build: .
+  cap_drop: [ALL]
+  cap_add: [NET_ADMIN, NET_RAW]
+  security_opt: ["no-new-privileges:true"]
+  cpus: ${BOX_CPUS:-4}
+  mem_limit: ${BOX_MEMORY:-4g}
+  pids_limit: 512
+  environment:
+    STRICT_DNS: ${STRICT_DNS:-0}
+  init: true
+
+services:
+  box-personal:
+    <<: *box
+    volumes:
+      - ${PERSONAL_WORKSPACE:-./workspaces/personal}:/workspace
+      - personal-claude:/home/node/.claude
+      - personal-codex:/home/node/.codex
+    networks:
+      - personal
+
+  box-work:
+    <<: *box
+    volumes:
+      - ${WORK_WORKSPACE:-./workspaces/work}:/workspace
+      - work-claude:/home/node/.claude
+      - work-codex:/home/node/.codex
+    networks:
+      - work
+
+volumes:
+  personal-claude:
+  personal-codex:
+  work-claude:
+  work-codex:
+
+networks:
+  personal:
+  work:

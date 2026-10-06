@@ -61,3 +61,26 @@ as root in the box to refresh them. Refreshing rebuilds the rules and IP set;
 established connections remain allowed. `EXTRA_ALLOWED_CIDRS` accepts
 comma-separated IPv4 CIDRs for optional local services; add only subnets the
 box should reach.
+
+## Two workspaces
+
+Copy `.env.example` to `.env` to customize workspace paths and resource limits,
+then start both boxes:
+
+```bash
+docker compose up -d --build
+docker compose logs
+docker compose exec -u node box-personal zsh
+docker compose exec -u node box-work zsh
+```
+
+Each box mounts only its configured workspace, has separate named volumes for
+agent settings and logins, and uses its own Docker network. Neither box can
+resolve the other's service name. Both drop all capabilities except `NET_ADMIN`
+and `NET_RAW`, enable `no-new-privileges`, and limit CPUs, memory and processes.
+Always use `-u node` for interactive commands.
+
+Default settings are prepared with `node` ownership during the image build, so
+Docker can initialize fresh login volumes without granting runtime `CHOWN`.
+Existing volumes retain their settings when the image is rebuilt. Stop both
+boxes with `docker compose down`; this keeps their login volumes.

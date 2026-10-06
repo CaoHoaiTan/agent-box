@@ -8,9 +8,9 @@ ARG CLAUDE_CODE_VERSION=2.1.285
 # Fail a piped command if any stage fails (curl | bash below).
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# hadolint ignore=DL3008
 # Apt versions are not pinned: Debian removes old versions from the mirrors,
 # which would break reproducible rebuilds. The base image digest is pinned.
+# hadolint ignore=DL3008
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         git curl ca-certificates iptables ipset dnsutils ripgrep jq zsh less procps openssh-client \
@@ -39,5 +39,11 @@ WORKDIR /workspace
 
 # Starts as root only so the entrypoint can install firewall rules; all
 # interactive work uses `exec -u node`. There is deliberately no sudo.
+# hadolint ignore=DL3002
 USER root
+# Seed named login volumes at build time: runtime intentionally lacks CHOWN and
+# DAC_OVERRIDE, so root cannot populate directories owned by node on first boot.
+RUN cp /etc/agent-box/defaults/codex-config.toml /home/node/.codex/config.toml \
+    && cp /etc/agent-box/defaults/claude-settings.json /home/node/.claude/settings.json \
+    && chown -R node:node /home/node/.codex /home/node/.claude
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
