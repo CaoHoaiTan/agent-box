@@ -16,28 +16,126 @@ x-box: &box
 services:
   box-personal:
     <<: *box
+    environment:
+      STRICT_DNS: ${STRICT_DNS:-0}
+      EXTRA_ALLOWED_CIDRS: ${PERSONAL_SERVICES_SUBNET:-172.30.10.0/24}
     volumes:
       - ${PERSONAL_WORKSPACE:-./workspaces/personal}:/workspace
       - personal-claude:/home/node/.claude
       - personal-codex:/home/node/.codex
     networks:
-      - personal
+      personal:
+        gw_priority: 1
+      personal-services: {}
 
   box-work:
     <<: *box
+    environment:
+      STRICT_DNS: ${STRICT_DNS:-0}
+      EXTRA_ALLOWED_CIDRS: ${WORK_SERVICES_SUBNET:-172.30.20.0/24}
     volumes:
       - ${WORK_WORKSPACE:-./workspaces/work}:/workspace
       - work-claude:/home/node/.claude
       - work-codex:/home/node/.codex
     networks:
-      - work
+      work:
+        gw_priority: 1
+      work-services: {}
+
+  personal-postgres:
+    image: postgres:16@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54
+    profiles: [services]
+    environment:
+      POSTGRES_USER: agentbox
+      POSTGRES_DB: agentbox
+      POSTGRES_PASSWORD: ${PERSONAL_POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - personal-postgres:/var/lib/postgresql/data
+    networks: [personal-services]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    pids_limit: 128
+
+  work-postgres:
+    image: postgres:16@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54
+    profiles: [services]
+    environment:
+      POSTGRES_USER: agentbox
+      POSTGRES_DB: agentbox
+      POSTGRES_PASSWORD: ${WORK_POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - work-postgres:/var/lib/postgresql/data
+    networks: [work-services]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    pids_limit: 128
+
+  personal-redis:
+    image: redis:7@sha256:c6eabf748fc7a61dbb5a705c78bcf3d6377b1127a97d0ce965c11c44ba46896f
+    profiles: [services]
+    command: [redis-server, --appendonly, 'yes', --requirepass, '${PERSONAL_REDIS_PASSWORD:-changeme}']
+    environment:
+      REDISCLI_AUTH: ${PERSONAL_REDIS_PASSWORD:-changeme}
+    volumes:
+      - personal-redis:/data
+    networks: [personal-services]
+    healthcheck:
+      test: [CMD-SHELL, 'redis-cli ping | grep -qx PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    pids_limit: 128
+
+  work-redis:
+    image: redis:7@sha256:c6eabf748fc7a61dbb5a705c78bcf3d6377b1127a97d0ce965c11c44ba46896f
+    profiles: [services]
+    command: [redis-server, --appendonly, 'yes', --requirepass, '${WORK_REDIS_PASSWORD:-changeme}']
+    environment:
+      REDISCLI_AUTH: ${WORK_REDIS_PASSWORD:-changeme}
+    volumes:
+      - work-redis:/data
+    networks: [work-services]
+    healthcheck:
+      test: [CMD-SHELL, 'redis-cli ping | grep -qx PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    pids_limit: 128
 
 volumes:
   personal-claude:
   personal-codex:
   work-claude:
   work-codex:
+  personal-postgres:
+  work-postgres:
+  personal-redis:
+  work-redis:
 
 networks:
   personal:
   work:
+  personal-services:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${PERSONAL_SERVICES_SUBNET:-172.30.10.0/24}
+  work-services:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${WORK_SERVICES_SUBNET:-172.30.20.0/24}

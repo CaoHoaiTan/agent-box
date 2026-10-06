@@ -28,7 +28,7 @@ Commands:
   refresh-firewall <personal|work>   Refresh allowed IPs as root
   reset <personal|work>              Remove a box and its login volumes after confirmation
   fetch <box> <repo> <branch> <clean-clone-path>
-                                    Delegate to the phase 6 safe-fetch helper
+                                    Fetch into an independent clean clone for review
 
 Use agentbox <command> --help for details.
 EOF
@@ -42,7 +42,7 @@ command_usage() {
     verify) echo 'Usage: agentbox verify <personal|work>'; echo 'Run eight isolation checks as node; exit nonzero if any check fails.' ;;
     refresh-firewall) echo 'Usage: agentbox refresh-firewall <personal|work>'; echo 'Rebuild the firewall as root using the allowlist baked into the image.' ;;
     reset) echo 'Usage: agentbox reset <personal|work>'; echo "Type 'reset <box>' when prompted to remove that box and its login volumes. Workspace files are kept." ;;
-    fetch) echo 'Usage: agentbox fetch <personal|work> <repo> <branch> <clean-clone-path>'; echo 'Repo is a directory within the configured workspace (relative or absolute).'; echo 'Requires host jq. The safe-fetch implementation arrives in phase 6.' ;;
+    fetch) echo 'Usage: agentbox fetch <personal|work> <repo> <branch> <clean-clone-path>'; echo 'Repo is a directory within the configured workspace (relative or absolute).'; echo 'Requires host jq, Git and realpath. Clean clone must be outside both workspaces.' ;;
   esac
 }
 
@@ -135,7 +135,11 @@ command -v docker >/dev/null 2>&1 || die 'Docker is required.'
 
 case "$command" in
   up)
-    compose up -d --build "${services[@]}"
+    if [[ $# == 0 ]]; then
+      compose up -d --build
+    else
+      compose up -d --build "${services[@]}"
+    fi
     for service in "${services[@]}"; do
       wait_for_box "$service"
     done
@@ -171,16 +175,28 @@ case "$command" in
       .services[$service].volumes[] |
       select(.type == "bind" and .target == "/workspace") | .source
     ' <<< "$config")"
-    workspace="$(cd "$workspace" && pwd -P)" || die 'configured workspace does not exist.'
+    command -v realpath >/dev/null 2>&1 || die 'fetch requires realpath on the host.'
+    [[ -d "$workspace" ]] || die 'configured workspace does not exist.'
+    workspace="$(realpath "$workspace")"
     case "$2" in
       /*) workspace_repo="$2" ;;
       *) workspace_repo="$workspace/$2" ;;
     esac
-    workspace_repo="$(cd "$workspace_repo" && pwd -P)" || die 'workspace repo directory does not exist.'
+    [[ -d "$workspace_repo" ]] || die 'workspace repo directory does not exist.'
+    workspace_repo="$(realpath "$workspace_repo")"
     case "$workspace_repo" in
       "$workspace"|"$workspace"/*) ;;
       *) die 'repo is outside the selected workspace.' ;;
     esac
-    "$repo_root/scripts/safe-fetch.sh" "$workspace_repo" "$3" "$4"
+    [[ -d "$4" ]] || die 'clean clone directory does not exist.'
+    clean_clone="$(realpath "$4")"
+    while IFS= read -r configured_workspace; do
+      [[ -d "$configured_workspace" ]] || continue
+      configured_workspace="$(realpath "$configured_workspace")"
+      case "$clean_clone" in
+        "$configured_workspace"|"$configured_workspace"/*) die 'clean clone must be outside both workspaces.' ;;
+      esac
+    done < <(jq -r '.services[] | .volumes[]? | select(.type == "bind" and .target == "/workspace") | .source' <<< "$config")
+    "$repo_root/scripts/safe-fetch.sh" "$workspace_repo" "$3" "$clean_clone"
     ;;
 esac
