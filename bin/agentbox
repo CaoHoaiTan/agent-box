@@ -1,0 +1,186 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_path="${BASH_SOURCE[0]}"
+while [[ -L "$script_path" ]]; do
+  link_target="$(readlink "$script_path")"
+  case "$link_target" in
+    /*) script_path="$link_target" ;;
+    *) script_path="$(dirname "$script_path")/$link_target" ;;
+  esac
+done
+repo_root="$(cd "$(dirname "$script_path")/.." && pwd -P)"
+
+die() {
+  echo "agentbox: $*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'EOF'
+Usage: agentbox <command> [arguments]
+
+Commands:
+  up [personal|work]                 Build/start one or both boxes; wait for firewall
+  down [personal|work]               Stop one or both boxes; keep login volumes
+  shell <personal|work>              Open zsh as node
+  verify <personal|work>             Run isolation checks as node
+  refresh-firewall <personal|work>   Refresh allowed IPs as root
+  reset <personal|work>              Remove a box and its login volumes after confirmation
+  fetch <box> <repo> <branch> <clean-clone-path>
+                                    Delegate to the phase 6 safe-fetch helper
+
+Use agentbox <command> --help for details.
+EOF
+}
+
+command_usage() {
+  case "$1" in
+    up) echo 'Usage: agentbox up [personal|work]'; echo 'Build/start selected boxes and stream startup logs until ready or failed (120s limit per box).' ;;
+    down) echo 'Usage: agentbox down [personal|work]'; echo 'Stop selected boxes without deleting containers or login volumes.' ;;
+    shell) echo 'Usage: agentbox shell <personal|work>'; echo 'Open an interactive zsh as the unprivileged node user.' ;;
+    verify) echo 'Usage: agentbox verify <personal|work>'; echo 'Run eight isolation checks as node; exit nonzero if any check fails.' ;;
+    refresh-firewall) echo 'Usage: agentbox refresh-firewall <personal|work>'; echo 'Rebuild the firewall as root using the allowlist baked into the image.' ;;
+    reset) echo 'Usage: agentbox reset <personal|work>'; echo "Type 'reset <box>' when prompted to remove that box and its login volumes. Workspace files are kept." ;;
+    fetch) echo 'Usage: agentbox fetch <personal|work> <repo> <branch> <clean-clone-path>'; echo 'Repo is a directory within the configured workspace (relative or absolute).'; echo 'Requires host jq. The safe-fetch implementation arrives in phase 6.' ;;
+  esac
+}
+
+validate_box() {
+  [[ "$1" == personal || "$1" == work ]] || die "unknown box '$1'; use personal or work."
+}
+
+compose() {
+  docker compose --project-directory "$repo_root" -f "$repo_root/docker-compose.yml" "$@"
+}
+
+wait_for_box() {
+  local service="$1" container started_at logs running attempt
+  local printed_lines=0 line_count=0
+  container="$(compose ps --all --quiet "$service")"
+  [[ -n "$container" ]] || die "$service has no container after startup."
+  started_at="$(docker inspect --format '{{.State.StartedAt}}' "$container")"
+
+  # Ignore old success messages from an earlier boot of the same container.
+  for ((attempt = 0; attempt < 120; attempt++)); do
+    logs="$(compose logs --no-color --since "$started_at" "$service")"
+    if [[ -n "$logs" ]]; then
+      line_count="$(printf '%s\n' "$logs" | wc -l)"
+      if (( line_count > printed_lines )); then
+        printf '%s\n' "$logs" | tail -n "+$((printed_lines + 1))"
+        printed_lines="$line_count"
+      fi
+    fi
+    running="$(docker inspect --format '{{.State.Running}}' "$container")"
+    [[ "$running" == true ]] || die "$service exited during startup; see the logs above."
+    if [[ "$logs" == *'FIREWALL FAIL'* ]]; then
+      die "$service failed the firewall self-test."
+    fi
+    # Firewall OK precedes settings initialization. Wait for the entrypoint's
+    # final sleep as well, so a later initialization failure cannot look ready.
+    if [[ "$logs" == *'Firewall OK'* ]] &&
+       compose exec -T -u node "$service" pgrep -x sleep >/dev/null 2>&1; then
+      echo "agentbox: $service ready."
+      return 0
+    fi
+    sleep 1
+  done
+  die "timed out waiting for $service; inspect 'docker compose logs $service'."
+}
+
+command="${1:---help}"
+if [[ "$command" == --help || "$command" == -h || "$command" == help ]]; then
+  usage
+  exit 0
+fi
+case "$command" in
+  up|down|shell|verify|refresh-firewall|reset|fetch) ;;
+  *) usage >&2; die "unknown command '$command'." ;;
+esac
+shift
+if [[ "${1:-}" == --help || "${1:-}" == -h ]]; then
+  command_usage "$command"
+  exit 0
+fi
+
+case "$command" in
+  up|down)
+    [[ $# -le 1 ]] || die "too many arguments; use '$command --help'."
+    services=(box-personal box-work)
+    if [[ $# == 1 ]]; then
+      validate_box "$1"
+      services=("box-$1")
+    fi
+    ;;
+  fetch)
+    [[ $# == 4 ]] || die 'fetch needs a box, repo, branch and clean-clone path; use fetch --help.'
+    validate_box "$1"
+    ;;
+  *)
+    [[ $# == 1 ]] || die "$command needs one box; use '$command --help'."
+    validate_box "$1"
+    ;;
+esac
+
+# Ask before contacting Docker, so refusal cannot cause a partial reset.
+if [[ "$command" == reset ]]; then
+  printf "This removes box-%s and its agent logins. Type 'reset %s' to continue: " "$1" "$1" >&2
+  confirmation=''
+  if ! IFS= read -r confirmation || [[ "$confirmation" != "reset $1" ]]; then
+    die 'reset cancelled; nothing was removed.'
+  fi
+fi
+
+command -v docker >/dev/null 2>&1 || die 'Docker is required.'
+
+case "$command" in
+  up)
+    compose up -d --build "${services[@]}"
+    for service in "${services[@]}"; do
+      wait_for_box "$service"
+    done
+    ;;
+  down) compose stop "${services[@]}" ;;
+  shell) compose exec -u node "box-$1" zsh ;;
+  verify) compose exec -T -u node "box-$1" /usr/local/bin/verify.sh ;;
+  refresh-firewall) compose exec -T -u root "box-$1" /usr/local/bin/init-firewall.sh ;;
+  reset)
+    command -v jq >/dev/null 2>&1 || die 'reset requires jq on the host.'
+    config="$(compose config --format json)"
+    volumes="$(jq -er --arg box "$1" '
+      .volumes as $volumes |
+      [$volumes[$box + "-claude"], $volumes[$box + "-codex"]][] |
+      if .external then error("refusing to remove an external volume") else .name end |
+      select(type == "string" and length > 0)
+    ' <<< "$config")"
+    [[ "$(printf '%s\n' "$volumes" | wc -l)" -eq 2 ]] || die 'cannot identify both login volumes.'
+    compose rm --stop --force "box-$1"
+    existing_volumes="$(docker volume ls --format '{{.Name}}')"
+    while IFS= read -r volume; do
+      if grep -Fxq -- "$volume" <<< "$existing_volumes"; then
+        docker volume rm -- "$volume"
+      fi
+    done <<< "$volumes"
+    echo "agentbox: $1 reset; workspace files were kept."
+    ;;
+  fetch)
+    command -v jq >/dev/null 2>&1 || die 'fetch requires jq on the host.'
+    [[ -n "$2" && -n "$3" && -n "$4" ]] || die 'fetch arguments must not be empty.'
+    config="$(compose config --format json)"
+    workspace="$(jq -er --arg service "box-$1" '
+      .services[$service].volumes[] |
+      select(.type == "bind" and .target == "/workspace") | .source
+    ' <<< "$config")"
+    workspace="$(cd "$workspace" && pwd -P)" || die 'configured workspace does not exist.'
+    case "$2" in
+      /*) workspace_repo="$2" ;;
+      *) workspace_repo="$workspace/$2" ;;
+    esac
+    workspace_repo="$(cd "$workspace_repo" && pwd -P)" || die 'workspace repo directory does not exist.'
+    case "$workspace_repo" in
+      "$workspace"|"$workspace"/*) ;;
+      *) die 'repo is outside the selected workspace.' ;;
+    esac
+    "$repo_root/scripts/safe-fetch.sh" "$workspace_repo" "$3" "$4"
+    ;;
+esac

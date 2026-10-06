@@ -84,3 +84,38 @@ Default settings are prepared with `node` ownership during the image build, so
 Docker can initialize fresh login volumes without granting runtime `CHOWN`.
 Existing volumes retain their settings when the image is rebuilt. Stop both
 boxes with `docker compose down`; this keeps their login volumes.
+
+## Command line
+
+Run `bin/agentbox` from any directory, or add this repository's `bin` directory
+to your `PATH`. Each command supports `--help`:
+
+```bash
+bin/agentbox up                 # build/start both boxes and wait for readiness
+bin/agentbox up work            # just the work box
+bin/agentbox shell work         # zsh as node
+bin/agentbox verify personal
+bin/agentbox verify work
+bin/agentbox refresh-firewall work
+bin/agentbox down               # stop both; keep settings and logins
+bin/agentbox reset personal     # requires typing: reset personal
+```
+
+`reset` deletes only the selected box and its two login volumes. It keeps the
+workspace and the other box. It requires `jq` on the host to read Compose's
+resolved volume names. No confirmation, EOF or any other response cancels it.
+
+`verify` reports eight PASS/FAIL checks and exits nonzero on failure. HTTP
+authentication errors from provider endpoints count as reachable. Its SSH
+check rejects any content in `/home/node/.ssh`, even if created inside the box;
+keep SSH keys on the host. The workspace write probe is removed afterwards.
+
+`bin/agentbox fetch <box> <repo> <branch> <clean-clone-path>` accepts a repo
+directory within that box's workspace and requires host `jq`. Its safe-fetch
+helper is implemented in phase 6; until then, it exits with an explicit error.
+
+`make up`, `make down`, `make shell-personal`, `make shell-work`, `make verify`,
+`make lint` and `make leaks` wrap the CLI and scripts. Use `BOX=personal` or
+`BOX=work` with `make up` and `make down` to select one box. `make lint` uses
+host ShellCheck/Hadolint when available, otherwise pinned tool images through
+Docker, with source passed on stdin.
