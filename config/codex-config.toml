@@ -1,0 +1,5 @@
+# WARNING: only acceptable inside agent-box, never on a host machine.
+# The container plus its outbound firewall is the sandbox here; Codex's own
+# sandbox may not work inside Docker.
+sandbox_mode = "danger-full-access"
+approval_policy = "on-request"
